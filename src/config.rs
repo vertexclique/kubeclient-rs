@@ -88,9 +88,23 @@ pub struct NamedAuthInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthProviderConfig {
+    #[serde(rename = "access-token")]
+    pub access_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthProvider {
+    pub config: Option<AuthProviderConfig>,
+    pub name: Option<String>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthInfo {
     pub username: Option<String>,
     pub password: Option<String>,
+    #[serde(rename = "auth-provider")]
+    pub auth_provider: Option<AuthProvider>,
     pub token: Option<String>,
     #[serde(rename = "tokenFile")]
     pub token_file: Option<String>,

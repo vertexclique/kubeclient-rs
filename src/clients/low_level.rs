@@ -54,7 +54,7 @@ impl KubeLowLevel {
             let req_pkcs_cert = reqwest::Identity::from_pkcs12_der(&pkcs_cert.to_der().unwrap(), "").unwrap();
             client.identity(req_pkcs_cert)
         } else { &mut client };
-        
+
         if let Some(username) = auth_info.username {
             headers.set(header::Authorization(
                 header::Basic { username: username,
@@ -63,6 +63,10 @@ impl KubeLowLevel {
         } else if let Some(token) = auth_info.token {
             headers.set(header::Authorization(
                 header::Bearer { token: token }
+            ));
+        } else if let Some(auth_provider_token) = auth_info.auth_provider.unwrap().config.unwrap().access_token {
+            headers.set(header::Authorization(
+                header::Bearer { token: auth_provider_token }
             ));
         }
 

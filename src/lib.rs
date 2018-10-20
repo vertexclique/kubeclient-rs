@@ -41,6 +41,8 @@ extern crate serde_yaml;
 extern crate url;
 extern crate url_serde;
 extern crate walkdir;
+extern crate futures;
+extern crate tokio;
 
 pub mod errors;
 pub mod config;

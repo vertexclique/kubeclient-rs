@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 pub struct Kubernetes {
     pub(crate) low_level: KubeLowLevel,
     namespace: Option<String>,
+    logs: Option<bool>,
 }
 
 impl Kubernetes {
@@ -36,6 +37,7 @@ impl Kubernetes {
         Ok(Kubernetes{
             low_level: KubeLowLevel::load_conf(path)?,
             namespace: None,
+            logs: None,
         })
     }
 
@@ -156,7 +158,22 @@ impl Kubernetes {
     ///     .get("clusterinfo")?;
     /// ```
     pub fn namespace(&self, namespace: &str) -> Kubernetes {
-        Kubernetes { low_level: self.low_level.clone(), namespace: Some(namespace.to_owned()) }
+        Kubernetes { low_level: self.low_level.clone(), namespace: Some(namespace.to_owned()), logs: self.logs }
+    }
+
+    /// Get a kubernetes client that uses a specific namespace
+    ///
+    /// ## Examples
+    ///
+    /// ```no_run
+    /// # use kubeclient::prelude::*;
+    /// let kube = Kubernetes::load_conf("admin.conf")?;
+    /// let cluster_info = kube.namespace("kube-system")
+    ///     .secrets()
+    ///     .get("clusterinfo")?;
+    /// ```
+    pub fn logs(&self) -> Kubernetes {
+        Kubernetes { low_level: self.low_level.clone(), namespace: self.namespace.clone(), logs: Some(true) }
     }
 
     /// Check to see if the Kubernetes API is healthy
@@ -263,7 +280,20 @@ impl Kubernetes {
         if let Some(ns) = self.get_ns::<R>() {
             route.namespace(ns);
         }
+
         self.low_level.get(&route)
+    }
+
+    fn fetch<R: Resource>(&self, name: &str) -> Result<()> {
+        let mut route = ResourceRoute::new(R::api(), R::kind().plural, name);
+        if let Some(ns) = self.get_ns::<R>() {
+            route.namespace(ns);
+        }
+
+        route.logs();
+
+        println!("GET LOGS : {:?}", self.logs);
+        self.low_level.get_for(&route)
     }
 
     fn list<R: ListableResource>(&self, query: Option<&ListQuery>) -> Result<Vec<R>> {

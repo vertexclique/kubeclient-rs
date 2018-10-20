@@ -15,6 +15,10 @@ impl<R> KubeClient<R> {
     pub fn namespace(&self, namespace: &str) -> Self {
         KubeClient { kube: self.kube.namespace(namespace), _marker: PhantomData }
     }
+
+    pub fn logs(&self) -> Self {
+        KubeClient { kube: self.kube.logs(), _marker: PhantomData }
+    }
 }
 
 // impl KubeClient<Pod> {
@@ -88,6 +92,19 @@ pub trait ReadClient  {
     /// let cfg_map = kube.config_maps().get("my-config-map")?;
     /// ```
     fn get(&self, name: &str) -> Result<Self::R>;
+
+    /// Gets the named resource
+    ///
+    /// This is similar to the `kubectl describe` CLI commands.
+    ///
+    /// ## Examples
+    ///
+    /// ```no_run
+    /// # use kubeclient::prelude::*;
+    /// let kube = Kubernetes::load_conf("admin.conf")?;
+    /// let cfg_map = kube.config_maps().get("my-config-map")?;
+    /// ```
+    fn fetch(&self, name: &str) -> Result<()>;
 }
 
 pub trait WriteClient {
@@ -154,6 +171,9 @@ impl<R: Resource> ReadClient for KubeClient<R> {
     }
     fn get(&self, name: &str) -> Result<Self::R> {
         self.kube.get::<Self::R>(name)
+    }
+    fn fetch(&self, name: &str) -> Result<()> {
+        self.kube.fetch::<Self::R>(name)
     }
 }
 

@@ -1,6 +1,8 @@
 use reqwest::{self, header, StatusCode};
 use std::path::Path;
+use std::mem;
 use config::KubeConfig;
+use config::AuthInfo;
 use resources::*;
 use std::fs::File;
 use std::io::Read;
@@ -14,11 +16,15 @@ use std::borrow::Borrow;
 use walkdir::WalkDir;
 use errors::*;
 use k8s_api::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-
+use reqwest::async::{Client, Decoder};
+use std::io::{self, Cursor, Write};
+use futures::{Future, Stream};
 
 #[derive(Clone)]
 pub struct KubeLowLevel {
     pub(crate) client: reqwest::Client,
+    pub(crate) async_client: reqwest::async::Client,
+    pub(crate) auth_info: AuthInfo,
     pub(crate) base_url: Url,
 }
 
@@ -31,6 +37,7 @@ struct MinimalResource {
     metadata: ObjectMeta,
 }
 
+
 impl KubeLowLevel {
     pub fn load_conf<P: AsRef<Path>>(path: P) -> Result<KubeLowLevel> {
         let kubeconfig = KubeConfig::load(path)?;
@@ -39,13 +46,20 @@ impl KubeLowLevel {
 
         let cluster = context.cluster;
 
-        let mut headers = header::Headers::new();
+        let mut headers = header::HeaderMap::new();
+        let mut headers_async = header::HeaderMap::new();
         let mut client = reqwest::Client::builder();
+        let mut async_client = reqwest::async::Client::builder();
 
         let mut client = if let Some(ca_cert) = cluster.ca_cert() {
             let req_ca_cert = reqwest::Certificate::from_der(&ca_cert.to_der().unwrap()).unwrap();
             client.add_root_certificate(req_ca_cert)
-        } else { &mut client };
+        } else { client };
+
+        let mut async_client = if let Some(ca_cert) = cluster.ca_cert() {
+            let req_ca_cert = reqwest::Certificate::from_der(&ca_cert.to_der().unwrap()).unwrap();
+            async_client.add_root_certificate(req_ca_cert)
+        } else { async_client };
 
         let client = if auth_info.client_certificate().is_some() && auth_info.client_key().is_some() {
             let crt = auth_info.client_certificate().unwrap();
@@ -53,29 +67,63 @@ impl KubeLowLevel {
             let pkcs_cert = Pkcs12::builder().build("", "admin", &key, &crt).chain_err(|| "Failed to build Pkcs12")?;
             let req_pkcs_cert = reqwest::Identity::from_pkcs12_der(&pkcs_cert.to_der().unwrap(), "").unwrap();
             client.identity(req_pkcs_cert)
-        } else { &mut client };
+        } else { client };
 
-        if let Some(username) = auth_info.username {
-            headers.set(header::Authorization(
-                header::Basic { username: username,
-                                password: auth_info.password }
-            ));
-        } else if let Some(token) = auth_info.token {
-            headers.set(header::Authorization(
-                header::Bearer { token: token }
-            ));
-        } else if let Some(auth_provider_token) = auth_info.auth_provider.unwrap().config.unwrap().access_token {
-            headers.set(header::Authorization(
-                header::Bearer { token: auth_provider_token }
-            ));
-        }
+        let async_client = if auth_info.client_certificate().is_some() && auth_info.client_key().is_some() {
+            let crt = auth_info.client_certificate().unwrap();
+            let key = auth_info.client_key().unwrap();
+            let pkcs_cert = Pkcs12::builder().build("", "admin", &key, &crt).chain_err(|| "Failed to build Pkcs12")?;
+            let req_pkcs_cert = reqwest::Identity::from_pkcs12_der(&pkcs_cert.to_der().unwrap(), "").unwrap();
+            async_client.identity(req_pkcs_cert)
+        } else { async_client };
 
         let client = client.default_headers(headers)
-                           .danger_disable_hostname_verification()
+                           .danger_accept_invalid_hostnames(true)
                            .build()
                            .chain_err(|| "Failed to build reqwest client")?;
 
-        Ok(KubeLowLevel { client, base_url: cluster.server })
+        let async_client = async_client.default_headers(headers_async)
+                          .danger_accept_invalid_hostnames(true)
+                          .build()
+                          .chain_err(|| "Failed to build reqwest client")?;
+
+
+        Ok(KubeLowLevel {
+            client: client,
+            async_client: async_client,
+            auth_info: auth_info,
+            base_url: cluster.server
+        })
+    }
+
+    pub fn auth(&self, reqb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let auth_info = self.auth_info.to_owned();
+
+        if let Some(username) = auth_info.username {
+            reqb.basic_auth(username, auth_info.password)
+        } else if let Some(token) = auth_info.token {
+            reqb.bearer_auth(token)
+        } else if let Some(auth_provider_token) = auth_info.auth_provider.unwrap().config.unwrap().access_token {
+            reqb.bearer_auth(auth_provider_token)
+        } else {
+            reqb
+        }
+    }
+
+    pub fn auth_async(&self, reqb: reqwest::async::RequestBuilder) -> reqwest::async::RequestBuilder {
+        let auth_info = self.auth_info.to_owned();
+
+        if let Some(username) = auth_info.username {
+            reqb.basic_auth(username, auth_info.password)
+        } else if let Some(token) = auth_info.token {
+            let header_value = format!("Bearer {}", token);
+            reqb.header(reqwest::header::AUTHORIZATION, &*header_value)
+        } else if let Some(auth_provider_token) = auth_info.auth_provider.unwrap().config.unwrap().access_token {
+            let header_value = format!("Bearer {}", auth_provider_token);
+            reqb.header(reqwest::header::AUTHORIZATION, &*header_value)
+        } else {
+            reqb
+        }
     }
 
     pub fn health(&self) -> Result<String> {
@@ -88,12 +136,12 @@ impl KubeLowLevel {
 
     pub fn exists(&self, route: &ResourceRoute) -> Result<bool> {
         let url = route.build(&self.base_url)?;
-        let mut response = self.client.get(url)
+        let mut response = self.auth(self.client.get(url))
             .send()
             .chain_err(|| "Failed to GET URL")?;
 
         match response.status() {
-            StatusCode::NotFound => Ok(false),
+            StatusCode::NOT_FOUND => Ok(false),
             s if s.is_success() => Ok(true),
             _ => {
                 let status: Status = response.json()
@@ -110,10 +158,15 @@ impl KubeLowLevel {
     }
 
     pub fn get<D>(&self, route: &ResourceRoute) -> Result<D>
-    where D: DeserializeOwned
+    where D: DeserializeOwned,
     {
         let url = route.build(&self.base_url)?;
         self.http_get_json(url)
+    }
+
+    pub fn get_for(&self, route: &ResourceRoute) -> Result<()> {
+        let url = route.build(&self.base_url)?;
+        self.http_get_text(url, route.resource.to_string())
     }
 
     // pub fn create<S, D>(&self, route: &KindRoute, resource: &str, data: &S) -> Result<D>
@@ -183,11 +236,11 @@ impl KubeLowLevel {
         let resource_url = self.base_url.join(&format!("{}/{}", kind_path, name))?;
 
         // First check if resource already exists
-        let mut response = self.client.get(resource_url).send()
+        let mut response = self.auth(self.client.get(resource_url)).send()
             .chain_err(|| "Failed to GET URL")?;
         match response.status() {
             // Apply if resource doesn't exist
-            StatusCode::NotFound => {
+            StatusCode::NOT_FOUND => {
                 let resp = self.http_post_json(kind_url, &body)?;
                 Ok(resp)
             }
@@ -246,8 +299,33 @@ impl KubeLowLevel {
     // Low-level
     //
 
+    pub(crate) fn http_get_raw_text(&self, url: Url, resource: String) -> () {
+        let mut req = self.auth_async(self.async_client.get(url));
+
+        println!("URL: {:?}", req);
+
+        let mut response = req
+            .send()
+            .and_then(|mut res| {
+                println!("{}", res.status());
+
+                res
+                    .into_body()
+                    .for_each(|chunk| {
+                        io::stdout()
+                            .write_all(&chunk)
+                            .map_err(|e| {
+                                panic!("example expects stdout is open, error={}", e)
+                            })
+                    })
+            })
+            .map_err(|err| println!("request error: {}", err));
+
+        tokio::run(response);
+    }
+
     pub(crate) fn http_get(&self, url: Url) -> Result<reqwest::Response> {
-        let mut req = self.client.get(url);
+        let mut req = self.auth(self.client.get(url));
 
         let mut response = req.send().chain_err(|| "Failed to GET URL")?;
 
@@ -264,11 +342,15 @@ impl KubeLowLevel {
         Ok(response.json().chain_err(|| "Failed to decode JSON response")?)
     }
 
+    pub(crate) fn http_get_text(&self, url: Url, resource: String) -> Result<()> {
+        Ok(self.http_get_raw_text(url, resource))
+    }
+
     pub(crate) fn http_post_json<S, D>(&self, url: Url, body: &S) -> Result<D>
     where S: Serialize,
           D: DeserializeOwned,
     {
-        let mut response = self.client.post(url)
+        let mut response = self.auth(self.client.post(url))
             .json(&body)
             .send()
             .chain_err(|| "Failed to POST URL")?;
@@ -286,7 +368,7 @@ impl KubeLowLevel {
     where S: Serialize,
           D: DeserializeOwned,
     {
-        let mut response = self.client.put(url)
+        let mut response = self.auth(self.client.put(url))
             .json(&body)
             .send()
             .chain_err(|| "Failed to PUT URL")?;
@@ -301,7 +383,7 @@ impl KubeLowLevel {
     }
 
     pub(crate) fn http_delete(&self, url: Url) -> Result<reqwest::Response> {
-        let mut response = self.client.delete(url)
+        let mut response = self.auth(self.client.delete(url))
             .send()
             .chain_err(|| "Failed to DELETE URL")?;
 
@@ -329,6 +411,7 @@ pub struct ResourceRoute<'a> {
     namespace: Option<&'a str>,
     kind: &'a str,
     resource: &'a str,
+    logs: Option<bool>,
     query: Option<Vec<(String, String)>>,
 }
 
@@ -384,11 +467,17 @@ impl<'a> ResourceRoute<'a> {
             api, kind, resource,
             namespace: None,
             query: None,
+            logs: None,
         }
     }
 
     pub fn namespace(&mut self, namespace: &'a str) -> &mut ResourceRoute<'a> {
         self.namespace = Some(namespace);
+        self
+    }
+
+    pub fn logs(&mut self) -> &mut ResourceRoute<'a> {
+        self.logs = Some(true);
         self
     }
 
@@ -412,10 +501,20 @@ impl<'a> ResourceRoute<'a> {
     // }
 
     pub(crate) fn build(&self, base_url: &Url) -> Result<Url> {
-        let path = match self.namespace {
-            Some(ns) => format!("{}/namespaces/{}/{}/{}", self.api, ns, self.kind, self.resource),
-            None => format!("{}/{}/{}", self.api, self.kind, self.resource),
+        println!("LOGGY {:?} NAMESPACE: {:?}", self.logs, self.namespace);
+        let path = match self.logs {
+            Some(true) =>
+                match self.namespace {
+                    Some(ns) => format!("{}/namespaces/{}/{}/{}/log?follow=1", self.api, ns, self.kind, self.resource),
+                    None => format!("{}/namespaces/{}/{}/{}/log?follow=1", self.api, "default", self.kind, self.resource),
+                }
+            _ =>
+                match self.namespace {
+                    Some(ns) => format!("{}/namespaces/{}/{}/{}", self.api, ns, self.kind, self.resource),
+                    None => format!("{}/{}/{}", self.api, self.kind, self.resource),
+                }
         };
+
         let mut url = base_url.join(&path)?;
         if let Some(ref query) = self.query {
             url.query_pairs_mut().extend_pairs(query);

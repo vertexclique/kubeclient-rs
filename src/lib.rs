@@ -43,6 +43,8 @@ extern crate url_serde;
 extern crate walkdir;
 extern crate futures;
 extern crate tokio;
+extern crate colored;
+extern crate rand;
 
 pub mod errors;
 pub mod config;

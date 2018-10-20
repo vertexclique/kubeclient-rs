@@ -19,6 +19,9 @@ use k8s_api::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use reqwest::async::{Client, Decoder};
 use std::io::{self, Cursor, Write};
 use futures::{Future, Stream};
+use colored::*;
+use rand::Rng;
+
 
 #[derive(Clone)]
 pub struct KubeLowLevel {
@@ -300,22 +303,39 @@ impl KubeLowLevel {
     //
 
     pub(crate) fn http_get_raw_text(&self, url: Url, resource: String) -> () {
+        let colors: [String; 8] = [
+            String::from("blue"),
+            String::from("red"),
+            String::from("green"),
+            String::from("yellow"),
+            String::from("cyan"),
+            String::from("purple"),
+            String::from("magenta"),
+            String::from("white")
+        ];
+
         let mut req = self.auth_async(self.async_client.get(url));
 
         println!("URL: {:?}", req);
 
         let mut response = req
             .send()
-            .and_then(|mut res| {
+            .and_then(move |mut res| {
                 println!("{}", res.status());
+
+                let name = format!("{} ::⇒ ", resource);
+                let color = rand::thread_rng().choose(&colors).unwrap();
+                let resname = name.color(color.to_string());
 
                 res
                     .into_body()
-                    .for_each(|chunk| {
+                    .for_each(move |chunk| {
+                        print!("{}", resname);
+
                         io::stdout()
                             .write_all(&chunk)
                             .map_err(|e| {
-                                panic!("example expects stdout is open, error={}", e)
+                                panic!("stdout expected to be open, error={}", e)
                             })
                     })
             })

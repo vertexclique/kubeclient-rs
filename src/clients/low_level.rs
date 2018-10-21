@@ -331,8 +331,10 @@ impl KubeLowLevel {
                     .into_body()
                     .for_each(move |chunk| {
                         print!("{}", resname);
+                        let stdout = io::stdout();
+                        let mut handle = stdout.lock();
 
-                        io::stdout()
+                        handle
                             .write_all(&chunk)
                             .map_err(|e| {
                                 panic!("stdout expected to be open, error={}", e)

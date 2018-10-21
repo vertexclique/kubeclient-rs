@@ -321,7 +321,7 @@ impl KubeLowLevel {
         let mut response = req
             .send()
             .and_then(move |mut res| {
-                println!("{}", res.status());
+                // println!("{}", res.status());
 
                 let name = format!("{} ::⇒ ", resource);
                 let color = rand::thread_rng().choose(&colors).unwrap();

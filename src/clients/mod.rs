@@ -292,7 +292,6 @@ impl Kubernetes {
 
         route.logs();
 
-        println!("GET LOGS : {:?}", self.logs);
         self.low_level.get_for(&route)
     }
 

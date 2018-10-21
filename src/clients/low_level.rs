@@ -316,7 +316,7 @@ impl KubeLowLevel {
 
         let mut req = self.auth_async(self.async_client.get(url));
 
-        println!("URL: {:?}", req);
+        // println!("URL: {:?}", req);
 
         let mut response = req
             .send()
@@ -523,7 +523,6 @@ impl<'a> ResourceRoute<'a> {
     // }
 
     pub(crate) fn build(&self, base_url: &Url) -> Result<Url> {
-        println!("LOGGY {:?} NAMESPACE: {:?}", self.logs, self.namespace);
         let path = match self.logs {
             Some(true) =>
                 match self.namespace {

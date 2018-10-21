@@ -8,7 +8,7 @@ pub(crate) static POD_INFO: KindInfo = KindInfo {
     api: V1_API,
 };
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Pod {
     /// Specification of the desired behavior of the pod. More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#spec-and-status
     pub spec: PodSpec,
@@ -21,12 +21,12 @@ pub struct Pod {
     pub status: Option<PodStatus>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct PodList {
     items: Vec<Pod>,
 }
 
-#[derive(Serialize, Debug, Default)]
+#[derive(Serialize, Debug, Default, Clone)]
 pub struct PodExec {
     stdin: Option<bool>,
     stdout: Option<bool>,
